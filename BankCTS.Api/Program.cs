@@ -1,3 +1,4 @@
+
 using BankCTS.Api.Contracts;
 using BankCTS.Api.Domain;
 using BankCTS.Api.Data;
@@ -20,38 +21,26 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-// Temporary in-memory storage.
-// Data will be lost when the application restarts.
-var cheques = new List<Cheque>();
-
-app.MapPost("/api/cheques", (CreateChequeRequest request) =>
+// CREATE A CHEQUE
+app.MapPost("/api/cheques", async (
+    CreateChequeRequest request,
+    BankCtsDbContext db) =>
 {
-    if (string.IsNullOrWhiteSpace(request.ChequeNumber) ||
-        string.IsNullOrWhiteSpace(request.AccountNumber) ||
-        string.IsNullOrWhiteSpace(request.DrawerName) ||
-        string.IsNullOrWhiteSpace(request.PayeeName))
-    {
-        return Results.BadRequest(new
-        {
-            message = "Cheque number, account number, drawer name, and payee name are required."
-        });
-    }
-
     var cheque = new Cheque
     {
         ChequeDate = request.ChequeDate,
         PresentationDate = request.PresentationDate,
-        DrawerName = request.DrawerName.Trim(),
-        PayeeName = request.PayeeName.Trim()
+        DrawerName = request.DrawerName?.Trim() ?? string.Empty,
+        PayeeName = request.PayeeName?.Trim() ?? string.Empty
     };
-
-    cheque.SetChequeNumber(request.ChequeNumber);
-    cheque.SetAccountNumber(request.AccountNumber);
-    cheque.SetAmount(request.Amount);
 
     try
     {
-        // Validate the cheque before accepting it for processing.
+        cheque.SetChequeNumber(request.ChequeNumber);
+        cheque.SetAccountNumber(request.AccountNumber);
+        cheque.SetAmount(request.Amount);
+
+        // Validate the cheque before accepting it.
         cheque.TransitionTo(ChequeStatus.Validated);
     }
     catch (ArgumentException ex)
@@ -64,7 +53,12 @@ app.MapPost("/api/cheques", (CreateChequeRequest request) =>
     }
 
     cheque.Id = Guid.NewGuid();
-    cheques.Add(cheque);
+
+    // Add the cheque to the database.
+    await db.Cheques.AddAsync(cheque);
+
+    // Permanently save the changes.
+    await db.SaveChangesAsync();
 
     return Results.Created(
         $"/api/cheques/{cheque.Id}",
@@ -84,8 +78,13 @@ app.MapPost("/api/cheques", (CreateChequeRequest request) =>
 })
 .WithName("CreateCheque");
 
-app.MapGet("/api/cheques", () =>
+// GET ALL CHEQUES
+app.MapGet("/api/cheques", async (BankCtsDbContext db) =>
 {
+    var cheques = await db.Cheques
+        .AsNoTracking()
+        .ToListAsync();
+
     return Results.Ok(cheques.Select(cheque => new
     {
         cheque.Id,
@@ -102,9 +101,14 @@ app.MapGet("/api/cheques", () =>
 })
 .WithName("GetAllCheques");
 
-app.MapGet("/api/cheques/{id:guid}", (Guid id) =>
+// GET A SINGLE CHEQUE
+app.MapGet("/api/cheques/{id:guid}", async (
+    Guid id,
+    BankCtsDbContext db) =>
 {
-    var cheque = cheques.Find(cheque => cheque.Id == id);
+    var cheque = await db.Cheques
+        .AsNoTracking()
+        .FirstOrDefaultAsync(cheque => cheque.Id == id);
 
     if (cheque is null)
     {
@@ -128,6 +132,5 @@ app.MapGet("/api/cheques/{id:guid}", (Guid id) =>
         Status = cheque.Status.ToString()
     });
 });
-
 
 app.Run();
