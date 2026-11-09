@@ -1,8 +1,13 @@
-
 using BankCTS.Api.Contracts;
 using BankCTS.Api.Domain;
+using BankCTS.Api.Data;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<BankCtsDbContext>(options =>
+    options.UseSqlite(
+        builder.Configuration.GetConnectionString("BankCtsDatabase")));
 
 builder.Services.AddOpenApi();
 
