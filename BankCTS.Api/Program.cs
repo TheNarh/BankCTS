@@ -2,6 +2,7 @@
 using BankCTS.Api.Contracts;
 using BankCTS.Api.Domain;
 using BankCTS.Api.Data;
+using BankCTS.Api.Validation;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +27,16 @@ app.MapPost("/api/cheques", async (
     CreateChequeRequest request,
     BankCtsDbContext db) =>
 {
+
+    // Validate the incoming request.
+    var errors = CreateChequeRequestValidator.Validate(request);
+
+    // Reject invalid requests before creating or saving a cheque.
+    if (errors.Count > 0)
+    {
+        return Results.ValidationProblem(errors);
+    }
+    
     var cheque = new Cheque
     {
         ChequeDate = request.ChequeDate,
