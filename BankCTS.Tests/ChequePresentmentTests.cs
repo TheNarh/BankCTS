@@ -10,16 +10,28 @@ public class ChequePresentmentTests
         return new ChequePresentment(
             Guid.NewGuid(),
             "BANK001",
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            "CTS-System");
     }
 
     private static ChequePresentment CreateSubmittedPresentment()
     {
         var presentment = CreatePresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Validating);
-        presentment.TransitionTo(PresentmentStatus.Pending);
-        presentment.TransitionTo(PresentmentStatus.Submitted);
+        presentment.TransitionTo(
+            PresentmentStatus.Validating,
+            "CTS-System",
+            "Validation started");
+
+        presentment.TransitionTo(
+            PresentmentStatus.Pending,
+            "CTS-System",
+            "Validation completed");
+
+        presentment.TransitionTo(
+            PresentmentStatus.Submitted,
+            "CTS-System",
+            "Submitted for clearing");
 
         return presentment;
     }
@@ -33,13 +45,48 @@ public class ChequePresentmentTests
     }
 
     [Fact]
+    public void New_presentment_records_initial_audit_event()
+    {
+        var presentment = CreatePresentment();
+
+        var auditEvent = Assert.Single(presentment.AuditEvents);
+
+        Assert.Null(auditEvent.PreviousStatus);
+        Assert.Equal(PresentmentStatus.Received, auditEvent.NewStatus);
+        Assert.Equal("CTS-System", auditEvent.PerformedBy);
+    }
+
+    [Fact]
     public void Received_presentment_can_move_to_validating()
     {
         var presentment = CreatePresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Validating);
+        presentment.TransitionTo(
+            PresentmentStatus.Validating,
+            "CTS-System",
+            "Validation started");
 
         Assert.Equal(PresentmentStatus.Validating, presentment.Status);
+    }
+
+    [Fact]
+    public void Successful_transition_creates_audit_event()
+    {
+        var presentment = CreatePresentment();
+
+        presentment.TransitionTo(
+            PresentmentStatus.Validating,
+            "CTS-System",
+            "Validation started");
+
+        Assert.Equal(2, presentment.AuditEvents.Count);
+
+        var auditEvent = presentment.AuditEvents.Last();
+
+        Assert.Equal(PresentmentStatus.Received, auditEvent.PreviousStatus);
+        Assert.Equal(PresentmentStatus.Validating, auditEvent.NewStatus);
+        Assert.Equal("CTS-System", auditEvent.PerformedBy);
+        Assert.Equal("Validation started", auditEvent.Reason);
     }
 
     [Fact]
@@ -47,7 +94,10 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Cleared);
+        presentment.TransitionTo(
+            PresentmentStatus.Cleared,
+            "CTS-System",
+            "Cheque cleared");
 
         Assert.Equal(PresentmentStatus.Cleared, presentment.Status);
     }
@@ -57,7 +107,10 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Returned);
+        presentment.TransitionTo(
+            PresentmentStatus.Returned,
+            "PayingBank001",
+            "Insufficient funds");
 
         Assert.Equal(PresentmentStatus.Returned, presentment.Status);
     }
@@ -68,7 +121,12 @@ public class ChequePresentmentTests
         var presentment = CreatePresentment();
 
         Assert.Throws<InvalidOperationException>(() =>
-            presentment.TransitionTo(PresentmentStatus.Cleared));
+            presentment.TransitionTo(
+                PresentmentStatus.Cleared,
+                "CTS-System"));
+
+        Assert.Single(presentment.AuditEvents);
+        Assert.Equal(PresentmentStatus.Received, presentment.Status);
     }
 
     [Fact]
@@ -76,10 +134,14 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Returned);
+        presentment.TransitionTo(
+            PresentmentStatus.Returned,
+            "PayingBank001");
 
         Assert.Throws<InvalidOperationException>(() =>
-            presentment.TransitionTo(PresentmentStatus.Submitted));
+            presentment.TransitionTo(
+                PresentmentStatus.Submitted,
+                "CTS-System"));
     }
 
     [Fact]
@@ -87,9 +149,13 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(PresentmentStatus.Cleared);
+        presentment.TransitionTo(
+            PresentmentStatus.Cleared,
+            "CTS-System");
 
         Assert.Throws<InvalidOperationException>(() =>
-            presentment.TransitionTo(PresentmentStatus.Returned));
+            presentment.TransitionTo(
+                PresentmentStatus.Returned,
+                "PayingBank001"));
     }
 }
