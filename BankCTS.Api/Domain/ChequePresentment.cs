@@ -71,4 +71,43 @@ public class ChequePresentment
         PreviousPresentmentId = previousPresentmentId;
         Status = PresentmentStatus.Received;
     }
+
+    public void TransitionTo(PresentmentStatus newStatus)
+{
+    bool isValidTransition = Status switch
+    {
+        PresentmentStatus.Received =>
+            newStatus == PresentmentStatus.Validating ||
+            newStatus == PresentmentStatus.Rejected ||
+            newStatus == PresentmentStatus.Cancelled ||
+            newStatus == PresentmentStatus.Failed,
+
+        PresentmentStatus.Validating =>
+            newStatus == PresentmentStatus.Pending ||
+            newStatus == PresentmentStatus.Rejected ||
+            newStatus == PresentmentStatus.Cancelled ||
+            newStatus == PresentmentStatus.Failed,
+
+        PresentmentStatus.Pending =>
+            newStatus == PresentmentStatus.Submitted ||
+            newStatus == PresentmentStatus.Rejected ||
+            newStatus == PresentmentStatus.Cancelled ||
+            newStatus == PresentmentStatus.Failed,
+
+        PresentmentStatus.Submitted =>
+            newStatus == PresentmentStatus.Cleared ||
+            newStatus == PresentmentStatus.Returned ||
+            newStatus == PresentmentStatus.Failed,
+
+        _ => false
+    };
+
+    if (!isValidTransition)
+    {
+        throw new InvalidOperationException(
+            $"Cannot transition presentment from {Status} to {newStatus}.");
+    }
+
+    Status = newStatus;
+}
 }
