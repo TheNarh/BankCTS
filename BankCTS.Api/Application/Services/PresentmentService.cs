@@ -20,7 +20,24 @@ public class PresentmentService
         string receivedBy,
         CancellationToken cancellationToken = default)
     {
-        // 1. Confirm that the physical cheque exists.
+        // 1. Reject an empty instrument ID before accessing the database.
+        if (instrumentId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A valid cheque instrument ID is required.",
+                nameof(instrumentId));
+        }
+
+        // 2. Construct the presentment.
+        // The domain constructor validates the bank code and receiving operator.
+        // It also creates the initial audit event in memory.
+        var presentment = new ChequePresentment(
+            instrumentId,
+            presentingBankCode,
+            DateTimeOffset.UtcNow,
+            receivedBy);
+
+        // 3. Confirm that the physical cheque exists.
         bool instrumentExists = await _db.ChequeInstruments
             .AnyAsync(
                 instrument => instrument.Id == instrumentId,
@@ -32,18 +49,10 @@ public class PresentmentService
                 "The specified cheque instrument was not found.");
         }
 
-        // 2. Create the presentment.
-        // The constructor automatically creates its initial audit event.
-        var presentment = new ChequePresentment(
-            instrumentId,
-            presentingBankCode,
-            DateTimeOffset.UtcNow,
-            receivedBy);
-
-        // 3. Add the presentment and its related audit event.
+        // 4. Add the presentment and its related audit event.
         _db.ChequePresentments.Add(presentment);
 
-        // 4. Save both records in one database transaction.
+        // 5. Save both records together.
         await _db.SaveChangesAsync(cancellationToken);
 
         return presentment;
