@@ -1,4 +1,5 @@
 
+using BankCTS.Api.Application.Services;
 using BankCTS.Api.Contracts;
 using BankCTS.Api.Domain;
 using BankCTS.Api.Data;
@@ -10,6 +11,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<BankCtsDbContext>(options =>
     options.UseSqlite(
         builder.Configuration.GetConnectionString("BankCtsDatabase")));
+
+builder.Services.AddScoped<PresentmentService>();
 
 builder.Services.AddOpenApi();
 
@@ -36,7 +39,7 @@ app.MapPost("/api/cheques", async (
     {
         return Results.ValidationProblem(errors);
     }
-    
+
     var cheque = new Cheque
     {
         ChequeDate = request.ChequeDate,
