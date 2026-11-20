@@ -1,4 +1,5 @@
 
+using BankCTS.Api.Application.Exceptions;
 using BankCTS.Api.Application.Services;
 using BankCTS.Api.Data;
 using BankCTS.Api.Domain;
@@ -12,7 +13,6 @@ public class PresentmentServiceTests
     [Fact]
     public async Task CreateAsync_PersistsPresentmentAndInitialAuditEvent()
     {
-        // Arrange: create an isolated in-memory SQLite database.
         await using var connection =
             new SqliteConnection("Data Source=:memory:");
 
@@ -24,7 +24,6 @@ public class PresentmentServiceTests
 
         Guid instrumentId;
 
-        // Create the database and save a physical cheque instrument.
         await using (var setupContext = new BankCtsDbContext(options))
         {
             await setupContext.Database.EnsureCreatedAsync();
@@ -47,7 +46,6 @@ public class PresentmentServiceTests
             instrumentId = instrument.Id;
         }
 
-        // Act: create a presentment through the application service.
         await using (var actContext = new BankCtsDbContext(options))
         {
             var service = new PresentmentService(actContext);
@@ -58,7 +56,6 @@ public class PresentmentServiceTests
                 "test-operator");
         }
 
-        // Assert: verify that the presentment was persisted.
         await using (var verifyContext = new BankCtsDbContext(options))
         {
             var savedPresentment = await verifyContext.ChequePresentments
@@ -69,7 +66,6 @@ public class PresentmentServiceTests
             Assert.Equal("BANK02", savedPresentment.PresentingBankCode);
             Assert.Equal(PresentmentStatus.Received, savedPresentment.Status);
 
-            // Verify that its initial audit event was also persisted.
             var auditEvents = await verifyContext.PresentmentAuditEvents
                 .AsNoTracking()
                 .Where(auditEvent =>
@@ -90,288 +86,533 @@ public class PresentmentServiceTests
         }
     }
 
-
-[Fact]
-public async Task CreateAsync_RollsBackPresentmentWhenAuditEventInsertFails()
-{
-    // Arrange: create an isolated in-memory SQLite database.
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
-
-    await connection.OpenAsync();
-
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
-
-    Guid instrumentId;
-
-    await using (var setupContext = new BankCtsDbContext(options))
+    [Fact]
+    public async Task CreateAsync_RollsBackPresentmentWhenAuditEventInsertFails()
     {
-        await setupContext.Database.EnsureCreatedAsync();
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-        var instrument = new ChequeInstrument(
-            issuingBankCode: "BANK01",
-            issuingBranchCode: null,
-            accountNumber: "000123456789",
-            chequeNumber: "000002",
-            amount: 2000.00m,
-            currency: "GHS",
-            chequeDate: new DateOnly(2026, 11, 17),
-            drawerName: "Kofi Mensah",
-            payeeName: "Akosua Owusu");
+        await connection.OpenAsync();
 
-        setupContext.ChequeInstruments.Add(instrument);
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-        await setupContext.SaveChangesAsync();
+        Guid instrumentId;
 
-        instrumentId = instrument.Id;
+        await using (var setupContext = new BankCtsDbContext(options))
+        {
+            await setupContext.Database.EnsureCreatedAsync();
 
-        // Simulate a database failure when inserting an audit event.
-        await setupContext.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TRIGGER FailAuditInsert
-            BEFORE INSERT ON PresentmentAuditEvents
-            BEGIN
-                SELECT RAISE(ABORT, 'Simulated audit insert failure');
-            END;
-            """);
+            var instrument = new ChequeInstrument(
+                issuingBankCode: "BANK01",
+                issuingBranchCode: null,
+                accountNumber: "000123456789",
+                chequeNumber: "000002",
+                amount: 2000.00m,
+                currency: "GHS",
+                chequeDate: new DateOnly(2026, 11, 17),
+                drawerName: "Kofi Mensah",
+                payeeName: "Akosua Owusu");
+
+            setupContext.ChequeInstruments.Add(instrument);
+
+            await setupContext.SaveChangesAsync();
+
+            instrumentId = instrument.Id;
+
+            await setupContext.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TRIGGER FailAuditInsert
+                BEFORE INSERT ON PresentmentAuditEvents
+                BEGIN
+                    SELECT RAISE(ABORT, 'Simulated audit insert failure');
+                END;
+                """);
+        }
+
+        await using (var actContext = new BankCtsDbContext(options))
+        {
+            var service = new PresentmentService(actContext);
+
+            await Assert.ThrowsAsync<DbUpdateException>(
+                () => service.CreateAsync(
+                    instrumentId,
+                    "BANK02",
+                    "test-operator"));
+        }
+
+        await using (var verifyContext = new BankCtsDbContext(options))
+        {
+            int presentmentCount = await verifyContext.ChequePresentments
+                .CountAsync();
+
+            int auditEventCount = await verifyContext.PresentmentAuditEvents
+                .CountAsync();
+
+            Assert.Equal(0, presentmentCount);
+            Assert.Equal(0, auditEventCount);
+        }
     }
 
-    // Act: attempt to create a presentment.
-    await using (var actContext = new BankCtsDbContext(options))
+    [Fact]
+    public async Task CreateAsync_ThrowsKeyNotFoundException_WhenInstrumentDoesNotExist()
     {
-        var service = new PresentmentService(actContext);
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-        await Assert.ThrowsAsync<DbUpdateException>(
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new BankCtsDbContext(options);
+
+        await context.Database.EnsureCreatedAsync();
+
+        var service = new PresentmentService(context);
+
+        Guid nonexistentInstrumentId = Guid.NewGuid();
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(
             () => service.CreateAsync(
-                instrumentId,
+                nonexistentInstrumentId,
                 "BANK02",
                 "test-operator"));
+
+        Assert.Equal(
+            0,
+            await context.ChequePresentments.CountAsync());
+
+        Assert.Equal(
+            0,
+            await context.PresentmentAuditEvents.CountAsync());
     }
 
-    // Assert: neither record should remain in the database.
-    await using (var verifyContext = new BankCtsDbContext(options))
+    [Fact]
+    public async Task CreateAsync_RejectsEmptyInstrumentId()
     {
-        int presentmentCount = await verifyContext.ChequePresentments
-            .CountAsync();
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-        int auditEventCount = await verifyContext.PresentmentAuditEvents
-            .CountAsync();
+        await connection.OpenAsync();
 
-        Assert.Equal(0, presentmentCount);
-        Assert.Equal(0, auditEventCount);
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new BankCtsDbContext(options);
+
+        await context.Database.EnsureCreatedAsync();
+
+        var service = new PresentmentService(context);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.CreateAsync(
+                Guid.Empty,
+                "BANK02",
+                "test-operator"));
+
+        Assert.Equal(0, await context.ChequePresentments.CountAsync());
+        Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
     }
-}
 
+    [Fact]
+    public async Task CreateAsync_RejectsBlankPresentingBankCode()
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-[Fact]
-public async Task CreateAsync_ThrowsKeyNotFoundException_WhenInstrumentDoesNotExist()
-{
-    // Arrange: create an isolated in-memory database.
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
 
-    await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
+        await using var context = new BankCtsDbContext(options);
 
-    await using var context = new BankCtsDbContext(options);
+        await context.Database.EnsureCreatedAsync();
 
-    await context.Database.EnsureCreatedAsync();
+        var instrument = new ChequeInstrument(
+            "BANK01",
+            "BRANCH01",
+            "0012345678",
+            "CHQ001",
+            1500m,
+            "GHS",
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "John Doe",
+            "Jane Doe");
 
-    var service = new PresentmentService(context);
+        context.ChequeInstruments.Add(instrument);
+        await context.SaveChangesAsync();
 
-    Guid nonexistentInstrumentId = Guid.NewGuid();
+        var service = new PresentmentService(context);
 
-    // Act and Assert: creating a presentment must fail.
-    await Assert.ThrowsAsync<KeyNotFoundException>(
-        () => service.CreateAsync(
-            nonexistentInstrumentId,
-            "BANK02",
-            "test-operator"));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.CreateAsync(
+                instrument.Id,
+                "   ",
+                "test-operator"));
 
-    // Verify that nothing was saved.
-    Assert.Equal(
-        0,
-        await context.ChequePresentments.CountAsync());
+        Assert.Equal(0, await context.ChequePresentments.CountAsync());
+        Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
+    }
 
-    Assert.Equal(
-        0,
-        await context.PresentmentAuditEvents.CountAsync());
-}
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("123456789012345678901234567890123456789012345678901")]
+    public async Task CreateAsync_RejectsInvalidPresentingBankCode(
+        string presentingBankCode)
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
+        await connection.OpenAsync();
 
-[Fact]
-public async Task CreateAsync_RejectsEmptyInstrumentId()
-{
-    // Arrange: create an isolated in-memory database.
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-    await connection.OpenAsync();
+        await using var context = new BankCtsDbContext(options);
 
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
+        await context.Database.EnsureCreatedAsync();
 
-    await using var context = new BankCtsDbContext(options);
+        var instrument = new ChequeInstrument(
+            "BANK01",
+            "BRANCH01",
+            "0012345678",
+            "CHQ001",
+            1500m,
+            "GHS",
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "John Doe",
+            "Jane Doe");
 
-    await context.Database.EnsureCreatedAsync();
+        context.ChequeInstruments.Add(instrument);
+        await context.SaveChangesAsync();
 
-    var service = new PresentmentService(context);
+        var service = new PresentmentService(context);
 
-    // Act and Assert.
-    await Assert.ThrowsAsync<ArgumentException>(
-        () => service.CreateAsync(
-            Guid.Empty,
-            "BANK02",
-            "test-operator"));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.CreateAsync(
+                instrument.Id,
+                presentingBankCode,
+                "test-operator"));
 
-    // No records should have been created.
-    Assert.Equal(0, await context.ChequePresentments.CountAsync());
-    Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
-}
+        Assert.Equal(0, await context.ChequePresentments.CountAsync());
+        Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
+    }
 
-[Fact]
-public async Task CreateAsync_RejectsBlankPresentingBankCode()
-{
-    // Arrange: create an isolated in-memory database.
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901")]
+    public async Task CreateAsync_RejectsInvalidReceivingOperator(
+        string receivedBy)
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-    await connection.OpenAsync();
+        await connection.OpenAsync();
 
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-    await using var context = new BankCtsDbContext(options);
+        await using var context = new BankCtsDbContext(options);
 
-    await context.Database.EnsureCreatedAsync();
+        await context.Database.EnsureCreatedAsync();
 
-    // Create a valid cheque instrument.
-    var instrument = new ChequeInstrument(
-        "BANK01",
-        "BRANCH01",
-        "0012345678",
-        "CHQ001",
-        1500m,
-        "GHS",
-        DateOnly.FromDateTime(DateTime.UtcNow),
-        "John Doe",
-        "Jane Doe");
+        var instrument = new ChequeInstrument(
+            "BANK01",
+            "BRANCH01",
+            "0012345678",
+            "CHQ001",
+            1500m,
+            "GHS",
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "John Doe",
+            "Jane Doe");
 
-    context.ChequeInstruments.Add(instrument);
-    await context.SaveChangesAsync();
+        context.ChequeInstruments.Add(instrument);
+        await context.SaveChangesAsync();
 
-    var service = new PresentmentService(context);
+        var service = new PresentmentService(context);
 
-    // Act and Assert.
-    await Assert.ThrowsAsync<ArgumentException>(
-        () => service.CreateAsync(
-            instrument.Id,
-            "   ",
-            "test-operator"));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.CreateAsync(
+                instrument.Id,
+                "BANK02",
+                receivedBy));
 
-    // No presentment or audit event should be created.
-    Assert.Equal(0, await context.ChequePresentments.CountAsync());
-    Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
-}
+        Assert.Equal(0, await context.ChequePresentments.CountAsync());
+        Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
+    }
 
+    [Fact]
+    public async Task CreateAsync_RejectsSecondActivePresentment()
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-[Theory]
-[InlineData("   ")]
-[InlineData("123456789012345678901234567890123456789012345678901")]
-public async Task CreateAsync_RejectsInvalidPresentingBankCode(
-    string presentingBankCode)
-{
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
 
-    await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
+        Guid instrumentId;
 
-    await using var context = new BankCtsDbContext(options);
+        await using (var setupContext = new BankCtsDbContext(options))
+        {
+            await setupContext.Database.EnsureCreatedAsync();
 
-    await context.Database.EnsureCreatedAsync();
+            var instrument = new ChequeInstrument(
+                "BANK01",
+                null,
+                "000123456789",
+                "000003",
+                1250m,
+                "GHS",
+                new DateOnly(2026, 11, 17),
+                "Kwame Mensah",
+                "Ama Boateng");
 
-    var instrument = new ChequeInstrument(
-        "BANK01",
-        "BRANCH01",
-        "0012345678",
-        "CHQ001",
-        1500m,
-        "GHS",
-        DateOnly.FromDateTime(DateTime.UtcNow),
-        "John Doe",
-        "Jane Doe");
+            setupContext.ChequeInstruments.Add(instrument);
+            await setupContext.SaveChangesAsync();
 
-    context.ChequeInstruments.Add(instrument);
-    await context.SaveChangesAsync();
+            instrumentId = instrument.Id;
+        }
 
-    var service = new PresentmentService(context);
+        await using (var actContext = new BankCtsDbContext(options))
+        {
+            var service = new PresentmentService(actContext);
 
-    await Assert.ThrowsAsync<ArgumentException>(
-        () => service.CreateAsync(
-            instrument.Id,
-            presentingBankCode,
-            "test-operator"));
+            await service.CreateAsync(
+                instrumentId,
+                "BANK02",
+                "test-operator");
 
-    Assert.Equal(0, await context.ChequePresentments.CountAsync());
-    Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
-}
+            await Assert.ThrowsAsync<PresentmentConflictException>(
+                () => service.CreateAsync(
+                    instrumentId,
+                    "BANK02",
+                    "test-operator"));
+        }
 
-[Theory]
-[InlineData("   ")]
-[InlineData("12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901")]
-public async Task CreateAsync_RejectsInvalidReceivingOperator(
-    string receivedBy)
-{
-    await using var connection =
-        new SqliteConnection("Data Source=:memory:");
+        await using (var verifyContext = new BankCtsDbContext(options))
+        {
+            Assert.Equal(
+                1,
+                await verifyContext.ChequePresentments.CountAsync());
 
-    await connection.OpenAsync();
+            Assert.Equal(
+                1,
+                await verifyContext.PresentmentAuditEvents.CountAsync());
+        }
+    }
 
-    var options = new DbContextOptionsBuilder<BankCtsDbContext>()
-        .UseSqlite(connection)
-        .Options;
+    [Fact]
+    public async Task Database_RejectsSecondActivePresentment_WhenServiceIsBypassed()
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
 
-    await using var context = new BankCtsDbContext(options);
+        await connection.OpenAsync();
 
-    await context.Database.EnsureCreatedAsync();
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
 
-    var instrument = new ChequeInstrument(
-        "BANK01",
-        "BRANCH01",
-        "0012345678",
-        "CHQ001",
-        1500m,
-        "GHS",
-        DateOnly.FromDateTime(DateTime.UtcNow),
-        "John Doe",
-        "Jane Doe");
+        Guid instrumentId;
 
-    context.ChequeInstruments.Add(instrument);
-    await context.SaveChangesAsync();
+        await using (var setupContext = new BankCtsDbContext(options))
+        {
+            await setupContext.Database.EnsureCreatedAsync();
 
-    var service = new PresentmentService(context);
+            var instrument = new ChequeInstrument(
+                "BANK01",
+                null,
+                "000123456789",
+                "000004",
+                1500m,
+                "GHS",
+                new DateOnly(2026, 11, 17),
+                "Kofi Mensah",
+                "Akosua Owusu");
 
-    await Assert.ThrowsAsync<ArgumentException>(
-        () => service.CreateAsync(
-            instrument.Id,
-            "BANK02",
-            receivedBy));
+            setupContext.ChequeInstruments.Add(instrument);
+            await setupContext.SaveChangesAsync();
 
-    Assert.Equal(0, await context.ChequePresentments.CountAsync());
-    Assert.Equal(0, await context.PresentmentAuditEvents.CountAsync());
-}
+            instrumentId = instrument.Id;
 
+            var firstPresentment = new ChequePresentment(
+                instrumentId,
+                "BANK02",
+                DateTimeOffset.UtcNow,
+                "test-operator");
 
+            setupContext.ChequePresentments.Add(firstPresentment);
+            await setupContext.SaveChangesAsync();
+        }
 
+        await using (var actContext = new BankCtsDbContext(options))
+        {
+            var duplicatePresentment = new ChequePresentment(
+                instrumentId,
+                "BANK02",
+                DateTimeOffset.UtcNow,
+                "test-operator");
+
+            actContext.ChequePresentments.Add(duplicatePresentment);
+
+            await Assert.ThrowsAsync<DbUpdateException>(
+                () => actContext.SaveChangesAsync());
+        }
+
+        await using (var verifyContext = new BankCtsDbContext(options))
+        {
+            Assert.Equal(
+                1,
+                await verifyContext.ChequePresentments.CountAsync());
+
+            Assert.Equal(
+                1,
+                await verifyContext.PresentmentAuditEvents.CountAsync());
+        }
+    }
+
+    [Fact]
+    public async Task ReturnedPresentment_AllowsNewLinkedPresentment()
+    {
+        await using var connection =
+            new SqliteConnection("Data Source=:memory:");
+
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<BankCtsDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        Guid instrumentId;
+        Guid previousPresentmentId;
+
+        await using (var setupContext = new BankCtsDbContext(options))
+        {
+            await setupContext.Database.EnsureCreatedAsync();
+
+            var instrument = new ChequeInstrument(
+                "BANK01",
+                null,
+                "000123456789",
+                "000005",
+                2000m,
+                "GHS",
+                new DateOnly(2026, 11, 17),
+                "Yaw Mensah",
+                "Esi Boateng");
+
+            setupContext.ChequeInstruments.Add(instrument);
+            await setupContext.SaveChangesAsync();
+
+            instrumentId = instrument.Id;
+
+            var previousPresentment = new ChequePresentment(
+                instrumentId,
+                "BANK02",
+                DateTimeOffset.UtcNow,
+                "test-operator");
+
+            previousPresentment.TransitionTo(
+                PresentmentStatus.Validating,
+                "test-operator");
+
+            previousPresentment.TransitionTo(
+                PresentmentStatus.Pending,
+                "test-operator");
+
+            previousPresentment.TransitionTo(
+                PresentmentStatus.Submitted,
+                "test-operator");
+
+            // Use the dedicated Return method with a structured reason code.
+            previousPresentment.Return(
+                "INSUFFICIENT_FUNDS",
+                "test-operator",
+                "Insufficient funds");
+
+            setupContext.ChequePresentments.Add(previousPresentment);
+            await setupContext.SaveChangesAsync();
+
+            previousPresentmentId = previousPresentment.Id;
+        }
+
+        await using (var actContext = new BankCtsDbContext(options))
+        {
+            var newPresentment = new ChequePresentment(
+                instrumentId,
+                "BANK02",
+                DateTimeOffset.UtcNow,
+                "test-operator",
+                previousPresentmentId);
+
+            actContext.ChequePresentments.Add(newPresentment);
+            await actContext.SaveChangesAsync();
+        }
+
+        await using (var verifyContext = new BankCtsDbContext(options))
+        {
+            var presentments = await verifyContext.ChequePresentments
+                .AsNoTracking()
+                .ToListAsync();
+
+            Assert.Equal(2, presentments.Count);
+
+            var returnedPresentment = presentments.Single(
+                presentment => presentment.Id == previousPresentmentId);
+
+            var newPresentment = presentments.Single(
+                presentment =>
+                    presentment.PreviousPresentmentId == previousPresentmentId);
+
+            Assert.Equal(
+                PresentmentStatus.Returned,
+                returnedPresentment.Status);
+
+            Assert.Equal(
+                "INSUFFICIENT_FUNDS",
+                returnedPresentment.ReturnReasonCode);
+
+            Assert.Equal(
+                PresentmentStatus.Received,
+                newPresentment.Status);
+
+            Assert.Equal(
+                instrumentId,
+                newPresentment.InstrumentId);
+
+            Assert.Equal(
+                "BANK02",
+                newPresentment.PresentingBankCode);
+
+            Assert.NotEqual(
+                returnedPresentment.Id,
+                newPresentment.Id);
+
+            var returnAuditEvent = await verifyContext.PresentmentAuditEvents
+                .AsNoTracking()
+                .SingleAsync(auditEvent =>
+                    auditEvent.PresentmentId == previousPresentmentId &&
+                    auditEvent.NewStatus == PresentmentStatus.Returned);
+
+            Assert.Equal(
+                "INSUFFICIENT_FUNDS",
+                returnAuditEvent.ReturnReasonCode);
+
+            Assert.Equal(
+                6,
+                await verifyContext.PresentmentAuditEvents.CountAsync());
+        }
+    }
 }

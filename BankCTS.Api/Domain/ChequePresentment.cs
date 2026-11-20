@@ -1,4 +1,3 @@
-
 namespace BankCTS.Api.Domain;
 
 public class ChequePresentment
@@ -23,6 +22,8 @@ public class ChequePresentment
     public ChequePresentment? PreviousPresentment { get; private set; }
 
     public DateTimeOffset ReceivedAt { get; private set; }
+
+    public string? ReturnReasonCode { get; private set; }
 
     private ChequePresentment()
     {
@@ -99,60 +100,105 @@ public class ChequePresentment
             receivedBy));
     }
 
-   public void TransitionTo(
-    PresentmentStatus newStatus,
-    string performedBy,
-    string? reason = null)
-{
-    bool isValidTransition = Status switch
+    public void TransitionTo(
+        PresentmentStatus newStatus,
+        string performedBy,
+        string? reason = null)
     {
-        PresentmentStatus.Received =>
-            newStatus == PresentmentStatus.Validating ||
-            newStatus == PresentmentStatus.Rejected ||
-            newStatus == PresentmentStatus.Cancelled ||
-            newStatus == PresentmentStatus.Failed,
+        if (newStatus == PresentmentStatus.Returned)
+        {
+            throw new InvalidOperationException(
+                "Use the Return method to return a presentment with a structured reason code.");
+        }
 
-        PresentmentStatus.Validating =>
-            newStatus == PresentmentStatus.Pending ||
-            newStatus == PresentmentStatus.Rejected ||
-            newStatus == PresentmentStatus.Cancelled ||
-            newStatus == PresentmentStatus.Failed,
-
-        PresentmentStatus.Pending =>
-            newStatus == PresentmentStatus.Submitted ||
-            newStatus == PresentmentStatus.Rejected ||
-            newStatus == PresentmentStatus.Cancelled ||
-            newStatus == PresentmentStatus.Failed,
-
-        PresentmentStatus.Submitted =>
-            newStatus == PresentmentStatus.Cleared ||
-            newStatus == PresentmentStatus.Returned ||
-            newStatus == PresentmentStatus.Failed,
-
-        _ => false
-    };
-
-    if (!isValidTransition)
-    {
-        throw new InvalidOperationException(
-            $"Cannot transition presentment from {Status} to {newStatus}.");
+        ApplyTransition(
+            newStatus,
+            performedBy,
+            reason,
+            returnReasonCode: null);
     }
 
-    // Capture the current status before changing it.
-    PresentmentStatus previousStatus = Status;
+    public void Return(
+        string returnReasonCode,
+        string performedBy,
+        string? reason = null)
+    {
+        if (string.IsNullOrWhiteSpace(returnReasonCode))
+        {
+            throw new ArgumentException(
+                "A return reason code is required.",
+                nameof(returnReasonCode));
+        }
 
-    // Create the audit event before changing the presentment.
-    // If the actor or reason is invalid, the status remains unchanged.
-    var auditEvent = new PresentmentAuditEvent(
-        Id,
-        previousStatus,
-        newStatus,
-        DateTimeOffset.UtcNow,
-        performedBy,
-        reason);
+        if (returnReasonCode.Trim().Length > 50)
+        {
+            throw new ArgumentException(
+                "Return reason code cannot exceed 50 characters.",
+                nameof(returnReasonCode));
+        }
 
-    // Apply the transition and record its audit event.
-    Status = newStatus;
-    _auditEvents.Add(auditEvent);
-}
+        ApplyTransition(
+            PresentmentStatus.Returned,
+            performedBy,
+            reason,
+            returnReasonCode.Trim());
+    }
+
+    private void ApplyTransition(
+        PresentmentStatus newStatus,
+        string performedBy,
+        string? reason,
+        string? returnReasonCode)
+    {
+        bool isValidTransition = Status switch
+        {
+            PresentmentStatus.Received =>
+                newStatus == PresentmentStatus.Validating ||
+                newStatus == PresentmentStatus.Rejected ||
+                newStatus == PresentmentStatus.Cancelled ||
+                newStatus == PresentmentStatus.Failed,
+
+            PresentmentStatus.Validating =>
+                newStatus == PresentmentStatus.Pending ||
+                newStatus == PresentmentStatus.Rejected ||
+                newStatus == PresentmentStatus.Cancelled ||
+                newStatus == PresentmentStatus.Failed,
+
+            PresentmentStatus.Pending =>
+                newStatus == PresentmentStatus.Submitted ||
+                newStatus == PresentmentStatus.Rejected ||
+                newStatus == PresentmentStatus.Cancelled ||
+                newStatus == PresentmentStatus.Failed,
+
+            PresentmentStatus.Submitted =>
+                newStatus == PresentmentStatus.Cleared ||
+                newStatus == PresentmentStatus.Returned ||
+                newStatus == PresentmentStatus.Failed,
+
+            _ => false
+        };
+
+        if (!isValidTransition)
+        {
+            throw new InvalidOperationException(
+                $"Cannot transition presentment from {Status} to {newStatus}.");
+        }
+
+        PresentmentStatus previousStatus = Status;
+
+        var auditEvent = new PresentmentAuditEvent(
+            Id,
+            previousStatus,
+            newStatus,
+            DateTimeOffset.UtcNow,
+            performedBy,
+            reason,
+            returnReasonCode);
+
+        // Change the aggregate only after the audit event is valid.
+        Status = newStatus;
+        ReturnReasonCode = returnReasonCode;
+
+        _auditEvents.Add(auditEvent);
+    }
 }

@@ -1,4 +1,3 @@
-
 namespace BankCTS.Api.Domain;
 
 public class PresentmentAuditEvent
@@ -17,6 +16,8 @@ public class PresentmentAuditEvent
 
     public string? Reason { get; private set; }
 
+    public string? ReturnReasonCode { get; private set; }
+
     private PresentmentAuditEvent()
     {
     }
@@ -27,7 +28,8 @@ public class PresentmentAuditEvent
         PresentmentStatus newStatus,
         DateTimeOffset occurredAt,
         string performedBy,
-        string? reason = null)
+        string? reason = null,
+        string? returnReasonCode = null)
     {
         if (presentmentId == Guid.Empty)
         {
@@ -71,14 +73,42 @@ public class PresentmentAuditEvent
                 nameof(reason));
         }
 
+        if (newStatus == PresentmentStatus.Returned &&
+            string.IsNullOrWhiteSpace(returnReasonCode))
+        {
+            throw new ArgumentException(
+                "A structured return reason code is required.",
+                nameof(returnReasonCode));
+        }
+
+        if (newStatus != PresentmentStatus.Returned &&
+            returnReasonCode is not null)
+        {
+            throw new ArgumentException(
+                "A return reason code can only be recorded for a returned presentment.",
+                nameof(returnReasonCode));
+        }
+
+        if (returnReasonCode?.Trim().Length > 50)
+        {
+            throw new ArgumentException(
+                "Return reason code cannot exceed 50 characters.",
+                nameof(returnReasonCode));
+        }
+
         Id = Guid.NewGuid();
         PresentmentId = presentmentId;
         PreviousStatus = previousStatus;
         NewStatus = newStatus;
         OccurredAt = occurredAt;
         PerformedBy = performedBy.Trim();
+
         Reason = string.IsNullOrWhiteSpace(reason)
             ? null
             : reason.Trim();
+
+        ReturnReasonCode = string.IsNullOrWhiteSpace(returnReasonCode)
+            ? null
+            : returnReasonCode.Trim();
     }
 }

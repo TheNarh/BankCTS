@@ -110,6 +110,12 @@ public class BankCtsDbContext : DbContext
 
             entity.HasKey(presentment => presentment.Id);
 
+            // Prevent more than one active presentment per physical cheque.
+            entity.HasIndex(presentment => presentment.InstrumentId)
+                .IsUnique()
+                .HasFilter(
+                    "\"Status\" IN ('Received', 'Validating', 'Pending', 'Submitted', 'Failed')");
+
             entity.Property(presentment => presentment.PresentingBankCode)
                 .IsRequired()
                 .HasMaxLength(50);
@@ -120,6 +126,10 @@ public class BankCtsDbContext : DbContext
 
             entity.Property(presentment => presentment.ReceivedAt)
                 .IsRequired();
+
+            // Structured return reason for policy evaluation.
+            entity.Property(presentment => presentment.ReturnReasonCode)
+                .HasMaxLength(50);
 
             // Link a re-presentment to its previous attempt.
             entity.HasOne(presentment => presentment.PreviousPresentment)
@@ -161,6 +171,10 @@ public class BankCtsDbContext : DbContext
 
             entity.Property(auditEvent => auditEvent.Reason)
                 .HasMaxLength(500);
+
+            // Preserve the structured return reason in the audit history.
+            entity.Property(auditEvent => auditEvent.ReturnReasonCode)
+                .HasMaxLength(50);
 
             entity.Property(auditEvent => auditEvent.OccurredAt)
                 .IsRequired();

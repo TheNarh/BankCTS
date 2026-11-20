@@ -145,7 +145,9 @@ namespace BankCTS.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("InstrumentId");
+                    b.HasIndex("InstrumentId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN ('Received', 'Validating', 'Pending', 'Submitted', 'Failed')");
 
                     b.HasIndex("PreviousPresentmentId");
 

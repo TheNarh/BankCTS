@@ -1,5 +1,8 @@
 
 using BankCTS.Api.Application.Services;
+using BankCTS.Api.Application.Exceptions;
+using BankCTS.Api.Application.Policies;
+using BankCTS.Api.Configuration;
 using BankCTS.Api.Contracts;
 using BankCTS.Api.Domain;
 using BankCTS.Api.Data;
@@ -12,7 +15,16 @@ builder.Services.AddDbContext<BankCtsDbContext>(options =>
     options.UseSqlite(
         builder.Configuration.GetConnectionString("BankCtsDatabase")));
 
+
 builder.Services.AddScoped<PresentmentService>();
+
+builder.Services
+    .AddOptions<ClearingPolicyOptions>()
+    .BindConfiguration(ClearingPolicyOptions.SectionName);
+
+builder.Services.AddScoped<ChequeValidityPolicy>();
+
+builder.Services.AddScoped<ReturnReasonPolicy>();
 
 builder.Services.AddOpenApi();
 

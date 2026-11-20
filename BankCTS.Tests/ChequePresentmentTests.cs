@@ -107,9 +107,9 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(
-            PresentmentStatus.Returned,
-            "PayingBank001",
+        presentment.Return(
+            "INSUFFICIENT_FUNDS",
+            "operator",
             "Insufficient funds");
 
         Assert.Equal(PresentmentStatus.Returned, presentment.Status);
@@ -134,9 +134,10 @@ public class ChequePresentmentTests
     {
         var presentment = CreateSubmittedPresentment();
 
-        presentment.TransitionTo(
-            PresentmentStatus.Returned,
-            "PayingBank001");
+        presentment.Return(
+            "INSUFFICIENT_FUNDS",
+            "operator",
+            "Insufficient funds");
 
         Assert.Throws<InvalidOperationException>(() =>
             presentment.TransitionTo(
